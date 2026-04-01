@@ -19,7 +19,6 @@ CONTENT_CACHE_DIR = os.path.join(CACHE_DIR, "content")
 HASHES_CACHE_FILE = os.path.join(CACHE_DIR, "hashes.json")
 
 DATA_DIR = "data"
-DICT_FILE = os.path.join(DATA_DIR, "dictionary.txt")
 PROGRESS_FILE = os.path.join(DATA_DIR, "progress.json")
 
 MAX_DICT_SIZE = 50 * 1024 * 1024  # 50MB
@@ -232,6 +231,10 @@ def main():
     client = bigquery.Client()
     max_date = get_max_date(client)
     
+    # Generate dictionary filename based on year and month (e.g., 2026_03)
+    year_month = str(max_date)[:7].replace("-", "_")
+    dict_file = os.path.join(DATA_DIR, f"{year_month}.dict")
+    
     # Step 2: Extract top JS function clusters
     hashes = get_hashes(client, max_date)
     if not hashes:
@@ -244,8 +247,8 @@ def main():
     if progress["processed_index"] >= len(hashes) or progress.get("dictionary_size", 0) >= MAX_DICT_SIZE:
         logging.info("Previous run was marked as complete. Resetting progress to allow re-run.")
         progress = {"processed_index": 0, "hashes_included": 0, "dictionary_size": 0}
-        if os.path.exists(DICT_FILE):
-            os.remove(DICT_FILE)
+        if os.path.exists(dict_file):
+            os.remove(dict_file)
             
     processed_index = progress["processed_index"]
     hashes_included = progress["hashes_included"]
@@ -253,8 +256,8 @@ def main():
     logging.info(f"Resuming from index {processed_index}. Total hashes to process: {len(hashes)}")
 
     # Load the existing dictionary state from disk
-    if os.path.exists(DICT_FILE):
-        with open(DICT_FILE, "rb") as f:
+    if os.path.exists(dict_file):
+        with open(dict_file, "rb") as f:
             dictionary_bytes = f.read()
     else:
         dictionary_bytes = b""
@@ -275,7 +278,7 @@ def main():
         content_bytes = read_content(h_info["hash"])
         if content_bytes is not None:
             dictionary_bytes += content_bytes
-            with open(DICT_FILE, "wb") as f:
+            with open(dict_file, "wb") as f:
                 f.write(dictionary_bytes)
             optimizer.update_index(dictionary_bytes)
             hashes_included += 1
@@ -343,7 +346,7 @@ def main():
 
             logging.info(f"[{i+1}/{len(hashes)}] Adding {h} to dict (filtered {original_size}->{filtered_size}, nodict={nodict_size}, dict={dict_size}). Included: {hashes_included+1}")
             dictionary_bytes += content_bytes
-            with open(DICT_FILE, "ab") as f:
+            with open(dict_file, "ab") as f:
                 f.write(content_bytes)
             optimizer.update_index(dictionary_bytes)
             hashes_included += 1
