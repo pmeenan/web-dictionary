@@ -1,2 +1,4 @@
 google-cloud-bigquery
 zstandard
+requests
+brotli

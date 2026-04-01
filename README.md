@@ -23,6 +23,9 @@ A utility for extracting the most common Javascript function bodies from the HTT
 Simply run the CLI script within the virtual environment:
 ```bash
 python generate_dictionary.py
+
+# To evaluate the generated dictionary's effectiveness against real traffic:
+python test_dictionary.py
 ```
 
 ### What it does:
@@ -34,3 +37,8 @@ python generate_dictionary.py
 - Filters incoming content to remove substrings (>= 50 bytes) that are already present in the active dictionary, minimizing duplicate content footprint.
 - Accumulates a raw binary dictionary file (`data/dictionary.txt`) up to 50MB.
 - Saves progress to `data/progress.json` allowing the script to be interrupted and resumed later safely.
+
+### Evaluating compression
+The secondary script `test_dictionary.py` can be triggered to simulate downloading top 100,000 resources utilizing the dictionary. It records raw network bytes vs brotli-10 vs dictionary-brotli-10 savings in `data/test_results.jsonl`.
+- Resumable multithreaded downloading explicitly parses `gzip`, `br`, or `zstd` representations transparently measuring real bytes.
+- It will automatically execute a post-evaluation analysis at the end of the script for you showing percentile average savings, or you can call it manually using `python test_dictionary.py --analyze`.
