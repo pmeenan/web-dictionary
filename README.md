@@ -13,9 +13,9 @@ A utility for extracting the most common Javascript function bodies from the HTT
 2. **Python Environment:**
    Set up a virtual environment and install dependencies.
    ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
+   python3 -m venv .venv
+   source .venv/bin/activate
+   python3 -m pip install -r requirements.txt
    ```
 
 ## Usage
