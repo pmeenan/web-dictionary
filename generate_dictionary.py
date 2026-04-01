@@ -5,6 +5,9 @@ import logging
 import os
 import sys
 
+# Disable mTLS to avoid required OpenSSL dependencies on workstations
+os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
+
 from google.cloud import bigquery
 import zstandard
 
