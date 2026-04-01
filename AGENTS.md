@@ -24,14 +24,15 @@ When working on this codebase, you must adhere to the following strict architect
    - It caches the query state to `cache/hashes.json` bound to the active parsed maximum partition date.
    - The fetch logic uses batched BigQuery queries `WHERE hash IN (...)`. This requires the BigQuery table to be clustered by `hash` to execute efficiently and avoid massive column scan costs!
    - Chunk bodies are cached persistently to `cache/content/`.
-   - The compiled dictionary output logic is preserved incrementally within `data/dictionary.txt` and tracks script bounds with `data/progress.json`. Auto-resets if fully completed or limits size appropriately.
+   - The compiled dictionary output logic is preserved incrementally within `data/dictionary.txt` and tracks script bounds with `data/progress.json`. Auto-resets if fully completed or limits size appropriately (max 50331660 bytes for brotli compatibility).
    - For python zst compression, it depends on the `zstandard` module available via pip. It applies a 64MB window (`window_log=26`) at level 11 to scan the entire cumulative dictionary.
    - The dictionary builder filters overlapping substrings >=50 bytes using a custom sliding-window hash index over `dictionary_bytes` for optimal O(N) deduplication speeds.
 
 7. **Evaluating Dictionary Compression**: The `test_dictionary.py` CLI script validates the generated dictionary's effectiveness against real HTTP Archive crawl URLs.
-   - Requires `requests`, `zstandard`, and `brotli` pip packages (brotli handles initial payload decompression).
+   - Requires `requests`, `zstandard`, and `brotli` pip packages.
    - Fetches requests from `httparchive.crawl.requests` matching the partition date, limited to `rank < 100000` for script/html types.
-   - Operates in a highly parallel fashion using a thread pool with length 10, skipping already-processed URLs from `data/test_results.jsonl` safely using a synchronized write Queue.
+   - Operates in a highly parallel fashion using a thread pool with length 10, skipping already-processed URLs from `data/test_results.jsonl` safely.
    - Decompresses `gzip`, `br`, or `zstd` payloads over the wire to acquire the true uncompressed byte counts.
-   - Evaluates dict efficiency using natively built zstandard (ZstdCompressor at level 21, window_log 26) applying a pre-parsed ZstdCompressionDict vs a base ZstdCompressor (level 21, window_log 26).
-   - Offers an `--analyze` flag that evaluates percentage savings relative to standard Zstd-21 with detailed distribution percentile cut-points (25th, 50th, 75th, 90th, 95th, 99th).
+   - Evaluates dict efficiency using natively built brotli binary via subprocess for the dictionary compression (brotli level 11) vs standard brotli (level 11). Drops and does not log results where the downloaded encoded size is less than 1400 bytes or where decompression fails.
+   - Offers an `--analyze` flag that evaluates percentage savings relative to standard Brotli-11 with detailed distribution percentile cut-points (25th, 50th, 75th, 90th, 95th, 99th), broken down by request type (e.g. `script`, `html`, and `all`). Remember that when mapping dictionaries into the output, any captured context (like `type`) needs tracking even throughout handled exception pathways to prevent default fallback merges.
+   - **Note on Brotli Dictionary Support:** The official `brotli` pip module for Python does not presently expose the `dictionary` parameter to `brotli.compress()`, despite what older CFFI wrappers or API documentation might suggest. For dictionary evaluation, the script invokes the system `brotli` binary via `subprocess.run(["brotli", "-q", "11", "-D", dict_file, "-c"], input=...)`. Agents must ensure system-level `brotli` tools are installed instead of chasing pip packaging workarounds.

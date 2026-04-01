@@ -12,6 +12,7 @@ import zlib
 import concurrent.futures
 import statistics
 import zstandard
+import subprocess
 
 # Set environment
 os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
@@ -133,8 +134,8 @@ def decompress_payload(raw_bytes, encoding):
         
     return raw_bytes
 
-def process_url(url_info, zdict):
-    """Fetch URL, measure raw encoded size, decompress, and run zstd (+ dict) tests."""
+def process_url(url_info, dict_file):
+    """Fetch URL, measure raw encoded size, decompress, and run brotli (+ dict) tests."""
     url = url_info["url"]
     
     headers = {
@@ -152,7 +153,10 @@ def process_url(url_info, zdict):
         status_code = response.status_code
         
         if status_code != 200 or original_encoded_size == 0:
-            return {"url": url, "error": f"HTTP {status_code} or empty body"}
+            return {"url": url, "type": url_info["type"], "error": f"HTTP {status_code} or empty body"}
+
+        if original_encoded_size <= 1400:
+            return {"url": url, "type": url_info["type"], "error": "Size threshold not met"}
 
         encoding = response.headers.get("Content-Encoding", "")
         
@@ -160,30 +164,36 @@ def process_url(url_info, zdict):
         decoded_bytes = decompress_payload(raw_bytes, encoding)
         
         if decoded_bytes is None:
-            return {"url": url, "error": "Decompression Failure"}
+            return {"url": url, "type": url_info["type"], "error": "Decompression Failure"}
             
         full_decoded_size = len(decoded_bytes)
         
         # Avoid compressing empty content or excessively massive blocks
         if full_decoded_size == 0:
-            return {"url": url, "error": "Empty decoded content"}
+            return {"url": url, "type": url_info["type"], "error": "Empty decoded content"}
             
         if full_decoded_size > 50 * 1024 * 1024:
-            return {"url": url, "error": "File too large to compress"}
+            return {"url": url, "type": url_info["type"], "error": "File too large to compress"}
 
-        # Compress with standard zstd
-        cparams = zstandard.ZstdCompressionParameters.from_level(21, window_log=26)
-        cctx_nodict = zstandard.ZstdCompressor(compression_params=cparams)
-        nodict_compressed = cctx_nodict.compress(decoded_bytes)
-        zstd_nodict_size = len(nodict_compressed)
+        # Compress with standard brotli
+        nodict_compressed = brotli.compress(decoded_bytes, quality=11)
+        brotli_nodict_size = len(nodict_compressed)
         
-        # Compress with dictionary zstd
-        if zdict:
-            cctx_dict = zstandard.ZstdCompressor(compression_params=cparams, dict_data=zdict)
-            dict_compressed = cctx_dict.compress(decoded_bytes)
-            zstd_dict_size = len(dict_compressed)
+        # Compress with dictionary brotli
+        if dict_file:
+            try:
+                proc = subprocess.run(
+                    ["brotli", "-q", "11", "-D", dict_file, "-c"],
+                    input=decoded_bytes,
+                    capture_output=True,
+                    check=True
+                )
+                brotli_dict_size = len(proc.stdout)
+            except subprocess.CalledProcessError as e:
+                logging.error(f"Brotli command failed: {e.stderr.decode('utf-8', errors='ignore')}")
+                brotli_dict_size = brotli_nodict_size
         else:
-            zstd_dict_size = zstd_nodict_size
+            brotli_dict_size = brotli_nodict_size
 
         return {
             "url": url,
@@ -191,12 +201,12 @@ def process_url(url_info, zdict):
             "rank": url_info["rank"],
             "original_encoded_size": original_encoded_size,
             "full_decoded_size": full_decoded_size,
-            "zstd_21_size": zstd_nodict_size,
-            "zstd_21_dict_size": zstd_dict_size
+            "brotli_11_size": brotli_nodict_size,
+            "brotli_11_dict_size": brotli_dict_size
         }
 
     except Exception as e:
-        return {"url": url, "error": str(e)}
+        return {"url": url, "type": url_info["type"], "error": str(e)}
 
 
 def analyze_results():
@@ -206,9 +216,9 @@ def analyze_results():
         logging.error("No results file to analyze.")
         return
 
-    savings_list = []
-    total_processed = 0
-    total_errors = 0
+    savings_list = {"script": [], "html": [], "all": []}
+    total_processed = {"script": 0, "html": 0, "all": 0}
+    total_errors = {"script": 0, "html": 0, "all": 0}
 
     with open(RESULTS_FILE, "r") as f:
         for line in f:
@@ -216,60 +226,72 @@ def analyze_results():
                 continue
             try:
                 data = json.loads(line)
+                req_type = data.get("type", "script")
+                if req_type not in ["script", "html"]:
+                    req_type = "script"
+                
                 if "error" in data:
-                    total_errors += 1
+                    total_errors["all"] += 1
+                    total_errors[req_type] += 1
                     continue
                 
-                total_processed += 1
-                z_size = data.get("zstd_21_size") or data.get("zstd_19_size") or data.get("brotli_10_size")
-                z_dict_size = data.get("zstd_21_dict_size") or data.get("zstd_19_dict_size") or data.get("brotli_10_dict_size")
+                total_processed["all"] += 1
+                total_processed[req_type] += 1
+                
+                z_size = data.get("brotli_11_size") or data.get("zstd_21_size") or data.get("zstd_19_size") or data.get("brotli_10_size")
+                z_dict_size = data.get("brotli_11_dict_size") or data.get("zstd_21_dict_size") or data.get("zstd_19_dict_size") or data.get("brotli_10_dict_size")
                 
                 if z_size is not None and z_dict_size is not None and z_size > 0:
                     # Savings calculated relative to the standard compression overhead
                     # bytes saved / base comp size
                     savings = (z_size - z_dict_size) / z_size
-                    savings_list.append(savings * 100.0) # percentage
+                    savings_pct = savings * 100.0
+                    savings_list["all"].append(savings_pct)
+                    savings_list[req_type].append(savings_pct)
             except Exception:
                 continue
 
-    if not savings_list:
+    if not savings_list["all"]:
         logging.info("Not enough valid data points for analysis.")
         return
 
-    savings_list.sort()
-    
-    avg_savings = sum(savings_list) / len(savings_list)
-    
-    # Calculate Percentiles using statistics module
-    # statistics.quantiles returns n-1 cut points for n intervals
-    # e.g., for n=100, quantiles gives [1%, 2%, ..., 99%] at index [0, 1, ..., 98]
-    if len(savings_list) >= 2:
-        try:
-            pcts = statistics.quantiles(savings_list, n=100)
-            p25 = pcts[24]
-            p50 = pcts[49]
-            p75 = pcts[74]
-            p90 = pcts[89]
-            p95 = pcts[94]
-            p99 = pcts[98]
-        except statistics.StatisticsError:
-            # Fallback if too few elements
+    for req_type in ["all", "script", "html"]:
+        lst = savings_list[req_type]
+        if not lst:
+            continue
+            
+        lst.sort()
+        
+        avg_savings = sum(lst) / len(lst)
+        
+        # Calculate Percentiles using statistics module
+        if len(lst) >= 2:
+            try:
+                pcts = statistics.quantiles(lst, n=100)
+                p25 = pcts[24]
+                p50 = pcts[49]
+                p75 = pcts[74]
+                p90 = pcts[89]
+                p95 = pcts[94]
+                p99 = pcts[98]
+            except statistics.StatisticsError:
+                # Fallback if too few elements
+                p25 = p50 = p75 = p90 = p95 = p99 = avg_savings
+        else:
             p25 = p50 = p75 = p90 = p95 = p99 = avg_savings
-    else:
-        p25 = p50 = p75 = p90 = p95 = p99 = avg_savings
 
-    logging.info("=== Analysis Results ===")
-    logging.info(f"Total Requests Processed: {total_processed}")
-    logging.info(f"Total Request Errors: {total_errors}")
-    logging.info(f"Avg URLs Saved Size: {avg_savings:.2f}%")
-    logging.info("Savings Distribution against zstd level 21:")
-    logging.info(f"  25th Percentile: {p25:.2f}%")
-    logging.info(f"  50th Percentile: {p50:.2f}%")
-    logging.info(f"  75th Percentile: {p75:.2f}%")
-    logging.info(f"  90th Percentile: {p90:.2f}%")
-    logging.info(f"  95th Percentile: {p95:.2f}%")
-    logging.info(f"  99th Percentile: {p99:.2f}%")
-    logging.info("========================")
+        logging.info(f"=== Analysis Results ({req_type.upper()}) ===")
+        logging.info(f"Total Requests Processed: {total_processed[req_type]}")
+        logging.info(f"Total Request Errors: {total_errors[req_type]}")
+        logging.info(f"Avg URLs Saved Size: {avg_savings:.2f}%")
+        logging.info("Savings Distribution against brotli level 11:")
+        logging.info(f"  25th Percentile: {p25:.2f}%")
+        logging.info(f"  50th Percentile: {p50:.2f}%")
+        logging.info(f"  75th Percentile: {p75:.2f}%")
+        logging.info(f"  90th Percentile: {p90:.2f}%")
+        logging.info(f"  95th Percentile: {p95:.2f}%")
+        logging.info(f"  99th Percentile: {p99:.2f}%")
+        logging.info("========================")
 
 
 def main():
@@ -288,13 +310,11 @@ def main():
     year_month = str(max_date)[:7].replace("-", "")
     dict_file = os.path.join(DATA_DIR, f"{year_month}.dict")
 
-    zdict = None
     if os.path.exists(dict_file):
-        with open(dict_file, "rb") as f:
-            dict_bytes = f.read()
-            zdict = zstandard.ZstdCompressionDict(dict_bytes)
-        logging.info(f"Loaded dictionary from {dict_file} ({len(dict_bytes)} bytes)")
+        dict_size = os.path.getsize(dict_file)
+        logging.info(f"Loaded dictionary from {dict_file} ({dict_size} bytes)")
     else:
+        dict_file = None
         logging.warning(f"No dictionary found at {dict_file}. Tests will run without a dictionary.")
 
     client = bigquery.Client()
@@ -312,9 +332,9 @@ def main():
     if pending_urls:
         logging.info("Starting processing pool...")
         processed_count = 0
-        valid_count = 0
-        rolling_zstd_savings_sum = 0.0
-        rolling_zstd_dict_savings_sum = 0.0
+        valid_count = {"script": 0, "html": 0, "all": 0}
+        rolling_br_savings_sum = {"script": 0.0, "html": 0.0, "all": 0.0}
+        rolling_br_dict_savings_sum = {"script": 0.0, "html": 0.0, "all": 0.0}
         total_pending = len(pending_urls)
         
         with open(RESULTS_FILE, "a") as f:
@@ -326,7 +346,7 @@ def main():
                 for _ in range(min(50, total_pending)):
                     try:
                         target = next(url_iter)
-                        active_futures.add(executor.submit(process_url, target, zdict))
+                        active_futures.add(executor.submit(process_url, target, dict_file))
                     except StopIteration:
                         break
                         
@@ -336,34 +356,46 @@ def main():
                     
                     for future in done:
                         result = future.result()
-                        f.write(json.dumps(result) + "\n")
-                        f.flush()
-                        
                         processed_count += 1
                         
                         if "error" not in result:
-                            orig_size = result.get("original_encoded_size")
-                            # Try 21 first, else fallback mapped from old runs
-                            z_size = result.get("zstd_21_size") or result.get("zstd_19_size")
-                            z_dict_size = result.get("zstd_21_dict_size") or result.get("zstd_19_dict_size")
+                            f.write(json.dumps(result) + "\n")
+                            f.flush()
                             
-                            if orig_size and orig_size > 0 and z_size is not None and z_dict_size is not None:
-                                zstd_savings = ((orig_size - z_size) / orig_size) * 100.0
-                                zstd_dict_savings = ((orig_size - z_dict_size) / orig_size) * 100.0
-                                rolling_zstd_savings_sum += zstd_savings
-                                rolling_zstd_dict_savings_sum += zstd_dict_savings
-                                valid_count += 1
+                            orig_size = result.get("original_encoded_size")
+                            # Try 11 first, else fallback mapped from old runs
+                            br_size = result.get("brotli_11_size") or result.get("zstd_21_size") or result.get("zstd_19_size") or result.get("brotli_10_size")
+                            br_dict_size = result.get("brotli_11_dict_size") or result.get("zstd_21_dict_size") or result.get("zstd_19_dict_size") or result.get("brotli_10_dict_size")
+                            
+                            if orig_size and orig_size > 0 and br_size is not None and br_dict_size is not None:
+                                br_savings = ((orig_size - br_size) / orig_size) * 100.0
+                                br_dict_savings = ((orig_size - br_dict_size) / orig_size) * 100.0
+                                req_type = result.get("type", "script")
+                                if req_type not in ["script", "html"]:
+                                    req_type = "script"
+                                
+                                for t in ["all", req_type]:
+                                    rolling_br_savings_sum[t] += br_savings
+                                    rolling_br_dict_savings_sum[t] += br_dict_savings
+                                    valid_count[t] += 1
                         
                         if processed_count % 100 == 0:
-                            avg_zstd = (rolling_zstd_savings_sum / valid_count) if valid_count > 0 else 0.0
-                            avg_zstd_dict = (rolling_zstd_dict_savings_sum / valid_count) if valid_count > 0 else 0.0
-                            logging.info(f"Processed {processed_count} / {total_pending} URLs | Avg Savings (Zstd 21): {avg_zstd:.2f}% | Avg Savings (Zstd 21 + Dict): {avg_zstd_dict:.2f}%")
+                            avg_msg = []
+                            for t in ["all", "script", "html"]:
+                                v = valid_count[t]
+                                if v > 0:
+                                    avg_br = (rolling_br_savings_sum[t] / v)
+                                    avg_br_dict = (rolling_br_dict_savings_sum[t] / v)
+                                    avg_msg.append(f"{t.upper()}: base {avg_br:.2f}%, dict {avg_br_dict:.2f}%")
+                                    
+                            status_str = " | ".join(avg_msg)
+                            logging.info(f"Processed {processed_count} / {total_pending} URLs | {status_str}")
                             
                     # Refill the queue to keep workers busy
                     while len(active_futures) < 50:
                         try:
                             target = next(url_iter)
-                            active_futures.add(executor.submit(process_url, target, zdict))
+                            active_futures.add(executor.submit(process_url, target, dict_file))
                         except StopIteration:
                             break
 

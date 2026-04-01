@@ -21,7 +21,7 @@ HASHES_CACHE_FILE = os.path.join(CACHE_DIR, "hashes.json")
 DATA_DIR = "data"
 PROGRESS_FILE = os.path.join(DATA_DIR, "progress.json")
 
-MAX_DICT_SIZE = 50 * 1024 * 1024  # 50MB
+MAX_DICT_SIZE = 50331660  # Brotli max dictionary size
 
 def init_directories():
     os.makedirs(CONTENT_CACHE_DIR, exist_ok=True)

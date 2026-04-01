@@ -10,7 +10,10 @@ A utility for extracting the most common Javascript function bodies from the HTT
    gcloud auth application-default login
    ```
 
-2. **Python Environment:**
+2. **System Dependencies:**
+   The evaluation script requires the `brotli` command-line binary to be installed on your system (e.g., `apt-get install brotli` on Debian/Ubuntu or `brew install brotli` on macOS) because the Python pip module currently lacks support for custom dictionary compression.
+
+3. **Python Environment:**
    Set up a virtual environment and install dependencies.
    ```bash
    python3 -m venv .venv
@@ -35,10 +38,10 @@ python test_dictionary.py
 - Extracts `script_chunks` payloads from BigQuery in batches (assuming BigQuery clustering by `hash` for efficiency) and caches them in `cache/content/`.
 - Systematically tests compressing each chunk to see if a zstandard dictionary yields a > 50% size reduction over standard compression. Evaluates if the object adds sufficient delta context by applying a 64MB window size (level 11) to scan the entire cumulative dictionary.
 - Filters incoming content to remove substrings (>= 50 bytes) that are already present in the active dictionary, minimizing duplicate content footprint.
-- Accumulates a raw binary dictionary file (`data/dictionary.txt`) up to 50MB.
+- Accumulates a raw binary dictionary file (`data/dictionary.txt`) up to 50331660 bytes.
 - Saves progress to `data/progress.json` allowing the script to be interrupted and resumed later safely.
 
 ### Evaluating compression
-The secondary script `test_dictionary.py` can be triggered to simulate downloading top 100,000 resources utilizing the dictionary. It records raw network bytes vs brotli-10 vs dictionary-brotli-10 savings in `data/test_results.jsonl`.
+The secondary script `test_dictionary.py` can be triggered to simulate downloading top 100,000 resources utilizing the dictionary. It records raw network bytes vs brotli-10 vs dictionary-brotli-10 savings and request types in `data/test_results.jsonl`.
 - Resumable multithreaded downloading explicitly parses `gzip`, `br`, or `zstd` representations transparently measuring real bytes.
-- It will automatically execute a post-evaluation analysis at the end of the script for you showing percentile average savings, or you can call it manually using `python test_dictionary.py --analyze`.
+- It will automatically execute a post-evaluation analysis at the end of the script for you showing percentile average savings broken down by request type (script vs html), or you can call it manually using `python test_dictionary.py --analyze`.
