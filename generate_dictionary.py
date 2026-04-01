@@ -22,7 +22,7 @@ DATA_DIR = "data"
 DICT_FILE = os.path.join(DATA_DIR, "dictionary.txt")
 PROGRESS_FILE = os.path.join(DATA_DIR, "progress.json")
 
-MAX_DICT_SIZE = 40 * 1024 * 1024  # 40MB
+MAX_DICT_SIZE = 50 * 1024 * 1024  # 50MB
 
 def init_directories():
     os.makedirs(CONTENT_CACHE_DIR, exist_ok=True)
