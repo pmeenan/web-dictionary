@@ -343,8 +343,8 @@ def main():
 
             logging.info(f"[{i+1}/{len(hashes)}] Adding {h} to dict (filtered {original_size}->{filtered_size}, nodict={nodict_size}, dict={dict_size}). Included: {hashes_included+1}")
             dictionary_bytes += content_bytes
-            with open(DICT_FILE, "wb") as f:
-                f.write(dictionary_bytes)
+            with open(DICT_FILE, "ab") as f:
+                f.write(content_bytes)
             optimizer.update_index(dictionary_bytes)
             hashes_included += 1
         else:
