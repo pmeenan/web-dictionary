@@ -156,6 +156,65 @@ def save_progress(progress):
     with open(PROGRESS_FILE, "w") as f:
         json.dump(progress, f, indent=2)
 
+class DictOptimizer:
+    def __init__(self, min_match_len=50):
+        self.min_match_len = min_match_len
+        self.chunk_size = 20
+        self.index = {}
+        self.indexed_len = 0
+        
+    def update_index(self, dictionary_bytes: bytes):
+        """Indexes any newly added bytes in dictionary_bytes."""
+        start_align = ((self.indexed_len + self.chunk_size - 1) // self.chunk_size) * self.chunk_size
+        dict_len = len(dictionary_bytes)
+        
+        for d_idx in range(start_align, dict_len - self.chunk_size + 1, self.chunk_size):
+            chunk = bytes(dictionary_bytes[d_idx : d_idx + self.chunk_size])
+            if chunk not in self.index:
+                self.index[chunk] = [d_idx]
+            elif len(self.index[chunk]) < 100:
+                self.index[chunk].append(d_idx)
+        self.indexed_len = dict_len
+        
+    def filter_content(self, new_content: bytes, dictionary_bytes: bytes) -> bytes:
+        if len(new_content) < self.min_match_len:
+            return new_content
+            
+        result = bytearray()
+        i = 0
+        last_unmatched_start = 0
+        new_len = len(new_content)
+        dict_len = len(dictionary_bytes)
+        
+        while i <= new_len - self.chunk_size:
+            window = bytes(new_content[i:i + self.chunk_size])
+            candidates = self.index.get(window)
+            
+            best_b, best_f, best_total = 0, 0, 0
+            if candidates:
+                for d_idx in candidates:
+                    b = 0
+                    max_b = i - last_unmatched_start
+                    while b < max_b and d_idx - 1 - b >= 0 and new_content[i - 1 - b] == dictionary_bytes[d_idx - 1 - b]:
+                        b += 1
+                    f = self.chunk_size
+                    while i + f < new_len and d_idx + f < dict_len and new_content[i + f] == dictionary_bytes[d_idx + f]:
+                        f += 1
+                    if b + f > best_total:
+                        best_total = b + f
+                        best_b = b
+                        best_f = f
+                        
+            if best_total >= self.min_match_len:
+                result.extend(new_content[last_unmatched_start : i - best_b])
+                i += best_f
+                last_unmatched_start = i
+            else:
+                i += 1
+                
+        result.extend(new_content[last_unmatched_start:])
+        return bytes(result)
+
 def main():
     """
     Primary execution flow:
@@ -204,6 +263,11 @@ def main():
     # Pre-fetch all needed contents
     fetch_missing_contents(client, hashes[processed_index:], max_date)
 
+    optimizer = DictOptimizer(min_match_len=50)
+    if dictionary_bytes:
+        logging.info("Indexing existing dictionary...")
+        optimizer.update_index(dictionary_bytes)
+
     if processed_index == 0 and not dictionary_bytes:
         # Start the dictionary with the most common hash unconditionally
         h_info = hashes[0]
@@ -213,6 +277,7 @@ def main():
             dictionary_bytes += content_bytes
             with open(DICT_FILE, "wb") as f:
                 f.write(dictionary_bytes)
+            optimizer.update_index(dictionary_bytes)
             hashes_included += 1
         processed_index += 1
         progress = {
@@ -258,13 +323,29 @@ def main():
         # Only append this chunk to the cumulative dictionary if it introduces novel patterns.
         # We determine "novelty" if its dictionary-compressed size is > 50% of the normal compressed size.
         if dict_size > 0.5 * nodict_size:
-            logging.info(f"[{i+1}/{len(hashes)}] Adding {h} to dict (nodict={nodict_size}, dict={dict_size}). Included: {hashes_included+1}")
+            original_size = len(content_bytes)
+            content_bytes = optimizer.filter_content(content_bytes, dictionary_bytes)
+            filtered_size = len(content_bytes)
+            
+            if filtered_size == 0:
+                logging.info(f"[{i+1}/{len(hashes)}] Skipping {h} (completely matched in dictionary after zstd evaluation).")
+                progress = {
+                    "processed_index": i + 1,
+                    "hashes_included": hashes_included,
+                    "dictionary_size": len(dictionary_bytes)
+                }
+                save_progress(progress)
+                continue
+
+            logging.info(f"[{i+1}/{len(hashes)}] Adding {h} to dict (filtered {original_size}->{filtered_size}, nodict={nodict_size}, dict={dict_size}). Included: {hashes_included+1}")
             dictionary_bytes += content_bytes
             with open(DICT_FILE, "wb") as f:
                 f.write(dictionary_bytes)
+            optimizer.update_index(dictionary_bytes)
             hashes_included += 1
         else:
             logging.info(f"[{i+1}/{len(hashes)}] Skipping {h} (nodict={nodict_size}, dict={dict_size}).")
+
 
         progress = {
             "processed_index": i + 1,

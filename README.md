@@ -31,5 +31,6 @@ python generate_dictionary.py
 - Caches the script hashes to `cache/hashes.json` bound to its execution date.
 - Extracts `script_chunks` payloads from BigQuery in batches (assuming BigQuery clustering by `hash` for efficiency) and caches them in `cache/content/`.
 - Systematically tests compressing each chunk to see if a zstandard dictionary yields a > 50% size reduction over standard compression. Evaluates if the object adds sufficient delta context.
+- Filters incoming content to remove substrings (>= 50 bytes) that are already present in the active dictionary, minimizing duplicate content footprint.
 - Accumulates a raw binary dictionary file (`data/dictionary.txt`) up to 40MB.
 - Saves progress to `data/progress.json` allowing the script to be interrupted and resumed later safely.
