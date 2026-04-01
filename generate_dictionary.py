@@ -232,7 +232,7 @@ def main():
     max_date = get_max_date(client)
     
     # Generate dictionary filename based on year and month (e.g., 2026_03)
-    year_month = str(max_date)[:7].replace("-", "_")
+    year_month = str(max_date)[:7].replace("-", "")
     dict_file = os.path.join(DATA_DIR, f"{year_month}.dict")
     
     # Step 2: Extract top JS function clusters
