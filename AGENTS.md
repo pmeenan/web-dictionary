@@ -25,5 +25,5 @@ When working on this codebase, you must adhere to the following strict architect
    - The fetch logic uses batched BigQuery queries `WHERE hash IN (...)`. This requires the BigQuery table to be clustered by `hash` to execute efficiently and avoid massive column scan costs!
    - Chunk bodies are cached persistently to `cache/content/`.
    - The compiled dictionary output logic is preserved incrementally within `data/dictionary.txt` and tracks script bounds with `data/progress.json`. Auto-resets if fully completed or limits size appropriately.
-   - For python zst compression, it depends on the `zstandard` module available via pip.
+   - For python zst compression, it depends on the `zstandard` module available via pip. It applies a 64MB window (`window_log=26`) at level 11 to scan the entire cumulative dictionary.
    - The dictionary builder filters overlapping substrings >=50 bytes using a custom sliding-window hash index over `dictionary_bytes` for optimal O(N) deduplication speeds.

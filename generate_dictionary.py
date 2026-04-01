@@ -308,14 +308,18 @@ def main():
             save_progress(progress)
             continue
 
+        # Define compression parameters with a 64MB window (window_log=26).
+        # We use from_level(11) to keep the rest of the params at the default for level 11.
+        cparams = zstandard.ZstdCompressionParameters.from_level(11, window_log=26)
+
         # Strategy Option A: Compress the chunk solely on its own (no initial dictionary context)
-        cctx_nodict = zstandard.ZstdCompressor(level=11)
+        cctx_nodict = zstandard.ZstdCompressor(compression_params=cparams)
         nodict_compressed = cctx_nodict.compress(content_bytes)
         nodict_size = len(nodict_compressed)
 
         # Strategy Option B: Compress the chunk leveraging our current cumulative dictionary
         dict_data = zstandard.ZstdCompressionDict(dictionary_bytes)
-        cctx_dict = zstandard.ZstdCompressor(level=11, dict_data=dict_data)
+        cctx_dict = zstandard.ZstdCompressor(dict_data=dict_data, compression_params=cparams)
         dict_compressed = cctx_dict.compress(content_bytes)
         dict_size = len(dict_compressed)
 
